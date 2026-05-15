@@ -5,7 +5,7 @@ from src.exchange.mexc.ws_client import OrderBook
 
 logger = logging.getLogger(__name__)
 
-MIN_PROFIT_PCT = 0.02
+MIN_PROFIT_PCT = -100.0  # debug: показываем все треугольники
 OPPORTUNITY_COOLDOWN = 1.0  # секунд между логами одного треугольника
 
 
