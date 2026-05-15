@@ -38,7 +38,8 @@ class MEXCWebSocket:
         self._ws = None
 
     def set_symbols(self, symbols: list[str]) -> None:
-        self._topics = [f"spot@public.bookTicker.v3.api.pb@{s}" for s in symbols]
+        # spot@public.aggre.bookTicker.v3.api.pb — актуальный формат после Aug 2025
+        self._topics = [f"spot@public.aggre.bookTicker.v3.api.pb@{s}" for s in symbols]
 
     async def start(self) -> None:
         while True:
@@ -95,11 +96,11 @@ class MEXCWebSocket:
             return
 
         field = wrapper.WhichOneof("body")
-        if field != "publicBookTicker":
+        if field not in ("publicAggreBookTicker", "publicBookTicker"):
             logger.debug(f"Ignored body field: {field}, channel: {wrapper.channel}")
             return
 
-        t = wrapper.publicBookTicker
+        t = getattr(wrapper, field)
         try:
             book = OrderBook(
                 symbol=wrapper.symbol,
