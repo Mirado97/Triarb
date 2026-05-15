@@ -6,6 +6,7 @@ from src.exchange.mexc.ws_client import OrderBook
 logger = logging.getLogger(__name__)
 
 MIN_PROFIT_PCT = 0.02
+OPPORTUNITY_COOLDOWN = 1.0  # секунд между логами одного треугольника
 
 
 def _find_leg(pair_map: dict, from_curr: str, to_curr: str) -> tuple[str, bool] | tuple[None, None]:
@@ -72,6 +73,7 @@ class ArbitrageEngine:
         self._triangles = triangles
         self._books: dict[str, OrderBook] = {}
         self._on_opportunity = on_opportunity
+        self._last_seen: dict[tuple, float] = {}  # triangle.pairs → timestamp
 
     async def on_book_update(self, book: OrderBook) -> None:
         self._books[book.symbol] = book
@@ -83,6 +85,11 @@ class ArbitrageEngine:
                 continue
             opp = self._calc(t)
             if opp and opp.profit_pct > MIN_PROFIT_PCT:
+                now = opp.ts
+                last = self._last_seen.get(t.pairs, 0)
+                if now - last < OPPORTUNITY_COOLDOWN:
+                    continue
+                self._last_seen[t.pairs] = now
                 logger.info(f"OPPORTUNITY: {t.pairs}  profit={opp.profit_pct:.4f}%")
                 if self._on_opportunity:
                     await self._on_opportunity(opp)
