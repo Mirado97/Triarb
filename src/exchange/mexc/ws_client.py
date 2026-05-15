@@ -29,6 +29,7 @@ class MEXCWebSocket:
     WS_URL = "wss://wbs.mexc.com/ws"
     BATCH_SIZE = 10
     RECONNECT_DELAY = 5
+    PING_INTERVAL = 20  # секунды между application-level PING
 
     def __init__(self, on_book_update):
         self._on_book_update = on_book_update
@@ -47,19 +48,34 @@ class MEXCWebSocket:
                 await asyncio.sleep(self.RECONNECT_DELAY)
 
     async def _run(self) -> None:
+        # heartbeat=None — отключаем aiohttp-level ping, используем MEXC application-level PING
         async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(self.WS_URL, heartbeat=20) as ws:
+            async with session.ws_connect(self.WS_URL, heartbeat=None) as ws:
                 self._ws = ws
                 logger.info("WS connected to MEXC")
                 await self._subscribe_all(ws)
-                await self._listen(ws)
+                ping_task = asyncio.create_task(self._ping_loop(ws))
+                try:
+                    await self._listen(ws)
+                finally:
+                    ping_task.cancel()
         logger.warning("WS connection closed")
+
+    async def _ping_loop(self, ws) -> None:
+        """Держим соединение живым application-level PING каждые 20 секунд."""
+        while True:
+            await asyncio.sleep(self.PING_INTERVAL)
+            try:
+                await ws.send_str('{"method":"PING"}')
+                logger.debug("Sent PING")
+            except Exception:
+                break
 
     async def _subscribe_all(self, ws) -> None:
         for i in range(0, len(self._topics), self.BATCH_SIZE):
             batch = self._topics[i : i + self.BATCH_SIZE]
             await ws.send_str(json.dumps({"method": "SUBSCRIPTION", "params": batch}))
-            logger.debug(f"Subscribed batch {i // self.BATCH_SIZE + 1}: {len(batch)} topics")
+            logger.info(f"Subscribed batch {i // self.BATCH_SIZE + 1}: {batch}")
             await asyncio.sleep(0.1)
 
     async def _listen(self, ws) -> None:
@@ -77,6 +93,10 @@ class MEXCWebSocket:
             data = orjson.loads(raw)
         except Exception:
             return
+
+        # Логируем всё кроме book-апдейтов (для диагностики)
+        if "d" not in data:
+            logger.info(f"MSG: {raw[:300]}")
 
         if data.get("method") == "PING":
             await self._ws.send_str('{"method":"PONG"}')
@@ -97,7 +117,7 @@ class MEXCWebSocket:
                 receive_ts=receive_ts,
             )
         except (KeyError, ValueError) as e:
-            logger.debug(f"Parse error: {e}, raw: {raw[:200]}")
+            logger.warning(f"Parse error: {e}, raw: {raw[:200]}")
             return
 
         await self._on_book_update(book)
