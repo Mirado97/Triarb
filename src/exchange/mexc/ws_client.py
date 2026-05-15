@@ -5,7 +5,8 @@ import time
 from dataclasses import dataclass
 
 import aiohttp
-import orjson
+
+from src.proto.PushDataV3ApiWrapper_pb2 import PushDataV3ApiWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class MEXCWebSocket:
     WS_URL = "wss://wbs.mexc.com/ws"
     BATCH_SIZE = 10
     RECONNECT_DELAY = 5
-    PING_INTERVAL = 20  # секунды между application-level PING
+    PING_INTERVAL = 20
 
     def __init__(self, on_book_update):
         self._on_book_update = on_book_update
@@ -37,7 +38,7 @@ class MEXCWebSocket:
         self._ws = None
 
     def set_symbols(self, symbols: list[str]) -> None:
-        self._topics = [f"spot@public.bookTicker.v3.api@{s}" for s in symbols]
+        self._topics = [f"spot@public.bookTicker.v3.api.pb@{s}" for s in symbols]
 
     async def start(self) -> None:
         while True:
@@ -48,7 +49,6 @@ class MEXCWebSocket:
                 await asyncio.sleep(self.RECONNECT_DELAY)
 
     async def _run(self) -> None:
-        # heartbeat=None — отключаем aiohttp-level ping, используем MEXC application-level PING
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(self.WS_URL, heartbeat=None) as ws:
                 self._ws = ws
@@ -62,7 +62,6 @@ class MEXCWebSocket:
         logger.warning("WS connection closed")
 
     async def _ping_loop(self, ws) -> None:
-        """Держим соединение живым application-level PING каждые 20 секунд."""
         while True:
             await asyncio.sleep(self.PING_INTERVAL)
             try:
@@ -80,44 +79,39 @@ class MEXCWebSocket:
 
     async def _listen(self, ws) -> None:
         async for msg in ws:
-            if msg.type == aiohttp.WSMsgType.TEXT:
-                await self._handle(msg.data)
-            elif msg.type == aiohttp.WSMsgType.BINARY:
-                await self._handle(msg.data)
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                await self._handle_binary(msg.data)
+            elif msg.type == aiohttp.WSMsgType.TEXT:
+                logger.info(f"TEXT: {msg.data[:300]}")
             elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                 break
 
-    async def _handle(self, raw) -> None:
+    async def _handle_binary(self, raw: bytes) -> None:
         receive_ts = time.time()
         try:
-            data = orjson.loads(raw)
-        except Exception:
+            wrapper = PushDataV3ApiWrapper.FromString(raw)
+        except Exception as e:
+            logger.warning(f"Protobuf parse error: {e}")
             return
 
-        # Логируем всё кроме book-апдейтов (для диагностики)
-        if "d" not in data:
-            logger.info(f"MSG: {raw[:300]}")
-
-        if data.get("method") == "PING":
-            await self._ws.send_str('{"method":"PONG"}')
+        field = wrapper.WhichOneof("body")
+        if field != "publicBookTicker":
+            logger.debug(f"Ignored body field: {field}, channel: {wrapper.channel}")
             return
 
-        d = data.get("d")
-        if not d or "a" not in d or "b" not in d:
-            return
-
+        t = wrapper.publicBookTicker
         try:
             book = OrderBook(
-                symbol=d["s"],
-                bid=float(d["b"]),
-                ask=float(d["a"]),
-                bid_qty=float(d["B"]),
-                ask_qty=float(d["A"]),
-                exchange_ts=data["t"] / 1000,
+                symbol=wrapper.symbol,
+                bid=float(t.bidPrice),
+                ask=float(t.askPrice),
+                bid_qty=float(t.bidQuantity),
+                ask_qty=float(t.askQuantity),
+                exchange_ts=wrapper.sendTime / 1000,
                 receive_ts=receive_ts,
             )
-        except (KeyError, ValueError) as e:
-            logger.warning(f"Parse error: {e}, raw: {raw[:200]}")
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Field error: {e}")
             return
 
         await self._on_book_update(book)
