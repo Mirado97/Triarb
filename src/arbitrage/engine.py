@@ -5,7 +5,7 @@ from src.exchange.mexc.ws_client import OrderBook
 
 logger = logging.getLogger(__name__)
 
-MIN_PROFIT_PCT = -100.0  # debug: показываем все треугольники
+MIN_PROFIT_PCT = 0.0
 OPPORTUNITY_COOLDOWN = 1.0  # секунд между логами одного треугольника
 
 
@@ -74,15 +74,9 @@ class ArbitrageEngine:
         self._books: dict[str, OrderBook] = {}
         self._on_opportunity = on_opportunity
         self._last_seen: dict[tuple, float] = {}  # triangle.pairs → timestamp
-        self._update_count = 0
 
     async def on_book_update(self, book: OrderBook) -> None:
         self._books[book.symbol] = book
-        self._update_count += 1
-        if self._update_count % 50 == 0:
-            missing = [p for t in self._triangles for p in t.pairs if p not in self._books]
-            missing_uniq = sorted(set(missing))
-            logger.info(f"Updates={self._update_count}  books={len(self._books)}/52  missing={missing_uniq or 'none'}")
         await self._check_all()
 
     async def _check_all(self) -> None:
