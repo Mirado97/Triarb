@@ -83,7 +83,8 @@ class MEXCWebSocket:
         for i in range(0, len(self._topics), self.BATCH_SIZE):
             batch = self._topics[i : i + self.BATCH_SIZE]
             await ws.send_str(json.dumps({"method": "SUBSCRIPTION", "params": batch}))
-            logger.info(f"Subscribed batch {i // self.BATCH_SIZE + 1}: {batch}")
+            symbols = [t.rsplit("@", 1)[-1] for t in batch]
+            logger.info(f"Subscribed batch {i // self.BATCH_SIZE + 1}: {symbols}")
             await asyncio.sleep(0.1)
 
     async def _listen(self, ws) -> None:
