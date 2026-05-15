@@ -10,6 +10,14 @@ from src.proto.PushDataV3ApiWrapper_pb2 import PushDataV3ApiWrapper
 
 logger = logging.getLogger(__name__)
 
+_WS_HEADERS = {
+    "Origin": "https://www.mexc.com",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
 
 @dataclass
 class OrderBook:
@@ -38,8 +46,8 @@ class MEXCWebSocket:
         self._ws = None
 
     def set_symbols(self, symbols: list[str]) -> None:
-        # spot@public.aggre.bookTicker.v3.api.pb — актуальный формат после Aug 2025
-        self._topics = [f"spot@public.aggre.bookTicker.v3.api.pb@{s}" for s in symbols]
+        # @10ms = 100 обновлений/сек — оптимально для арбитража
+        self._topics = [f"spot@public.aggre.bookTicker.v3.api.pb@10ms@{s}" for s in symbols]
 
     async def start(self) -> None:
         while True:
@@ -50,7 +58,7 @@ class MEXCWebSocket:
                 await asyncio.sleep(self.RECONNECT_DELAY)
 
     async def _run(self) -> None:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=_WS_HEADERS) as session:
             async with session.ws_connect(self.WS_URL, heartbeat=None) as ws:
                 self._ws = ws
                 logger.info("WS connected to MEXC")
@@ -83,7 +91,7 @@ class MEXCWebSocket:
             if msg.type == aiohttp.WSMsgType.BINARY:
                 await self._handle_binary(msg.data)
             elif msg.type == aiohttp.WSMsgType.TEXT:
-                logger.info(f"TEXT: {msg.data[:300]}")
+                logger.debug(f"TEXT: {msg.data[:200]}")
             elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                 break
 
@@ -96,11 +104,10 @@ class MEXCWebSocket:
             return
 
         field = wrapper.WhichOneof("body")
-        if field not in ("publicAggreBookTicker", "publicBookTicker"):
-            logger.debug(f"Ignored body field: {field}, channel: {wrapper.channel}")
+        if field != "publicAggreBookTicker":
             return
 
-        t = getattr(wrapper, field)
+        t = wrapper.publicAggreBookTicker
         try:
             book = OrderBook(
                 symbol=wrapper.symbol,
