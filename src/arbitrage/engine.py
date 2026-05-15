@@ -23,7 +23,7 @@ def _find_leg(pair_map: dict, from_curr: str, to_curr: str) -> tuple[str, bool] 
 
 
 def build_triangles(symbols: set[str]) -> list[Triangle]:
-    known_quotes = {"USDT", "BTC", "ETH", "BNB"}
+    known_quotes = {"USDT", "BTC", "ETH", "BNB", "USDC", "EUR", "USD1", "USDE"}
 
     pair_map: dict[tuple[str, str], str] = {}
     for sym in symbols:
