@@ -18,6 +18,8 @@ _WS_HEADERS = {
     ),
 }
 
+MAX_SUBS_PER_CONN = 30  # лимит MEXC на одно WS соединение
+
 
 @dataclass
 class OrderBook:
@@ -43,48 +45,54 @@ class MEXCWebSocket:
     def __init__(self, on_book_update):
         self._on_book_update = on_book_update
         self._topics: list[str] = []
-        self._ws = None
 
     def set_symbols(self, symbols: list[str]) -> None:
-        # @10ms = 100 обновлений/сек — оптимально для арбитража
         self._topics = [f"spot@public.aggre.bookTicker.v3.api.pb@10ms@{s}" for s in symbols]
 
     async def start(self) -> None:
+        # Разбиваем топики на группы по MAX_SUBS_PER_CONN и запускаем параллельно
+        chunks = [
+            self._topics[i : i + MAX_SUBS_PER_CONN]
+            for i in range(0, len(self._topics), MAX_SUBS_PER_CONN)
+        ]
+        logger.info(f"Starting {len(chunks)} WS connection(s) for {len(self._topics)} topics")
+        await asyncio.gather(*[self._run_connection(idx, chunk) for idx, chunk in enumerate(chunks)])
+
+    async def _run_connection(self, idx: int, topics: list[str]) -> None:
         while True:
             try:
-                await self._run()
+                await self._run(idx, topics)
             except Exception as e:
-                logger.error(f"WS error: {e}, reconnecting in {self.RECONNECT_DELAY}s")
+                logger.error(f"WS[{idx}] error: {e}, reconnecting in {self.RECONNECT_DELAY}s")
                 await asyncio.sleep(self.RECONNECT_DELAY)
 
-    async def _run(self) -> None:
+    async def _run(self, idx: int, topics: list[str]) -> None:
         async with aiohttp.ClientSession(headers=_WS_HEADERS) as session:
             async with session.ws_connect(self.WS_URL, heartbeat=None) as ws:
-                self._ws = ws
-                logger.info("WS connected to MEXC")
-                await self._subscribe_all(ws)
-                ping_task = asyncio.create_task(self._ping_loop(ws))
+                logger.info(f"WS[{idx}] connected ({len(topics)} topics)")
+                await self._subscribe_all(ws, idx, topics)
+                ping_task = asyncio.create_task(self._ping_loop(ws, idx))
                 try:
                     await self._listen(ws)
                 finally:
                     ping_task.cancel()
-        logger.warning("WS connection closed")
+        logger.warning(f"WS[{idx}] connection closed")
 
-    async def _ping_loop(self, ws) -> None:
+    async def _ping_loop(self, ws, idx: int) -> None:
         while True:
             await asyncio.sleep(self.PING_INTERVAL)
             try:
                 await ws.send_str('{"method":"PING"}')
-                logger.debug("Sent PING")
+                logger.debug(f"WS[{idx}] PING sent")
             except Exception:
                 break
 
-    async def _subscribe_all(self, ws) -> None:
-        for i in range(0, len(self._topics), self.BATCH_SIZE):
-            batch = self._topics[i : i + self.BATCH_SIZE]
+    async def _subscribe_all(self, ws, idx: int, topics: list[str]) -> None:
+        for i in range(0, len(topics), self.BATCH_SIZE):
+            batch = topics[i : i + self.BATCH_SIZE]
             await ws.send_str(json.dumps({"method": "SUBSCRIPTION", "params": batch}))
             symbols = [t.rsplit("@", 1)[-1] for t in batch]
-            logger.info(f"Subscribed batch {i // self.BATCH_SIZE + 1}: {symbols}")
+            logger.info(f"WS[{idx}] batch {i // self.BATCH_SIZE + 1}: {symbols}")
             await asyncio.sleep(0.1)
 
     async def _listen(self, ws) -> None:
@@ -104,8 +112,7 @@ class MEXCWebSocket:
             logger.warning(f"Protobuf parse error: {e}")
             return
 
-        field = wrapper.WhichOneof("body")
-        if field != "publicAggreBookTicker":
+        if wrapper.WhichOneof("body") != "publicAggreBookTicker":
             return
 
         t = wrapper.publicAggreBookTicker
