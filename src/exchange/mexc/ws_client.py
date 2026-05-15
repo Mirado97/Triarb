@@ -27,7 +27,7 @@ class OrderBook:
 
 
 class MEXCWebSocket:
-    WS_URL = "wss://wbs.mexc.com/ws"
+    WS_URL = "wss://wbs-api.mexc.com/ws"
     BATCH_SIZE = 10
     RECONNECT_DELAY = 5
     PING_INTERVAL = 20
