@@ -40,6 +40,7 @@ class ExecutionEngine:
         min_profit_pct: float,
         cooldown_sec: float = 5.0,
         broadcast: Broadcast | None = None,
+        is_paused: callable = lambda: False,
     ):
         self._client = client
         self._trade_amount = trade_amount
@@ -48,11 +49,14 @@ class ExecutionEngine:
         self._lock = asyncio.Lock()
         self._last_exec = 0.0
         self._broadcast = broadcast
+        self._is_paused = is_paused
         self._start_ts = time.time()
         self.total_profit = 0.0
         self.cycles = 0
 
     async def on_opportunity(self, opp: Opportunity) -> None:
+        if self._is_paused():
+            return
         if opp.profit_pct < self._min_profit_pct:
             return
         if self._lock.locked():

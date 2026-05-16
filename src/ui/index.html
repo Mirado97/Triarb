@@ -90,6 +90,10 @@ tr:hover td { background: var(--bg2); }
 
 <header>
   <h1>◈ TRIARB</h1>
+  <button id="pause-btn" onclick="togglePause()" style="
+    padding:6px 18px; border-radius:4px; border:none; cursor:pointer;
+    font-family:inherit; font-size:13px; font-weight:bold;
+    background:var(--green); color:#000;">▶ LIVE</button>
   <div class="conn"><div class="dot" id="dot"></div><span id="cstat">Connecting...</span></div>
 </header>
 
@@ -145,6 +149,7 @@ tr:hover td { background: var(--bg2); }
 </div>
 
 <script>
+let ws = null;
 let startTs = null;
 let stuckCount = 0;
 
@@ -236,7 +241,7 @@ function onStats(d) {
 }
 
 function connect() {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => {
     document.getElementById('dot').className = 'dot on';
     document.getElementById('cstat').textContent = 'Connected';
@@ -253,6 +258,7 @@ function connect() {
     else if (m.type === 'stuck') onStuck(m.data);
     else if (m.type === 'latency') onLatency(m.data);
     else if (m.type === 'stats') onStats(m.data);
+    else if (m.type === 'paused') onPaused(m.data);
   };
 }
 
@@ -266,6 +272,24 @@ setInterval(() => {
 }, 1000);
 
 connect();
+
+function togglePause() {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({cmd: 'toggle_pause'}));
+}
+
+function onPaused(paused) {
+  const btn = document.getElementById('pause-btn');
+  if (paused) {
+    btn.textContent = '⏸ PAUSED';
+    btn.style.background = 'var(--red)';
+    btn.style.color = '#fff';
+  } else {
+    btn.textContent = '▶ LIVE';
+    btn.style.background = 'var(--green)';
+    btn.style.color = '#000';
+  }
+}
 </script>
 </body>
 </html>

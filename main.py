@@ -139,6 +139,7 @@ async def main() -> None:
             trade_amount=trade_amount,
             min_profit_pct=min_profit_pct,
             broadcast=ui.broadcast,
+            is_paused=lambda: ui.paused,
         )
         on_opportunity = executor.on_opportunity
         log.info("Trading mode: LIVE")

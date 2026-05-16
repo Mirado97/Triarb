@@ -15,6 +15,7 @@ class UIServer:
         self._app = web.Application()
         self._app.router.add_get("/", self._index)
         self._app.router.add_get("/ws", self._ws_handler)
+        self.paused = False
 
     async def start(self) -> None:
         runner = web.AppRunner(self._app, access_log=None)
@@ -46,9 +47,22 @@ class UIServer:
         await ws.prepare(request)
         self._clients.add(ws)
         logger.debug("UI client connected")
+
+        # Send current pause state to new client
+        await ws.send_str(json.dumps({"type": "paused", "data": self.paused}))
+
         try:
-            async for _ in ws:
-                pass
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    try:
+                        cmd = json.loads(msg.data)
+                        if cmd.get("cmd") == "toggle_pause":
+                            self.paused = not self.paused
+                            state = "PAUSED" if self.paused else "RESUMED"
+                            logger.info(f"Bot {state} via UI")
+                            await self.broadcast({"type": "paused", "data": self.paused})
+                    except Exception:
+                        pass
         finally:
             self._clients.discard(ws)
         return ws
