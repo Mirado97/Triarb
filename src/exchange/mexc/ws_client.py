@@ -45,6 +45,11 @@ class MEXCWebSocket:
     def __init__(self, on_book_update):
         self._on_book_update = on_book_update
         self._topics: list[str] = []
+        self._lat_samples: list[float] = []  # rolling last-100 WS latencies
+
+    @property
+    def avg_latency_ms(self) -> float:
+        return sum(self._lat_samples) / len(self._lat_samples) if self._lat_samples else 0.0
 
     def set_symbols(self, symbols: list[str]) -> None:
         self._topics = [f"spot@public.aggre.bookTicker.v3.api.pb@10ms@{s}" for s in symbols]
@@ -129,5 +134,10 @@ class MEXCWebSocket:
         except (ValueError, AttributeError) as e:
             logger.warning(f"Field error: {e}")
             return
+
+        lat = book.latency_ms
+        self._lat_samples.append(lat)
+        if len(self._lat_samples) > 100:
+            self._lat_samples.pop(0)
 
         await self._on_book_update(book)

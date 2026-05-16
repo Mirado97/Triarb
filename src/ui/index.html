@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TriArb</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+  --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff;
+}
+body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace; font-size: 14px; }
+
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; background: var(--bg2); border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 16px; color: var(--blue); letter-spacing: 2px; }
+.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+.dot.on { background: var(--green); }
+
+.statsbar {
+  display: flex; gap: 28px; padding: 8px 20px;
+  background: var(--bg2); border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.si { display: flex; gap: 6px; }
+.sl { color: var(--muted); }
+.sv { color: var(--text); }
+.sv.g { color: var(--green); }
+.sv.r { color: var(--red); }
+
+nav {
+  display: flex; background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 20px;
+}
+nav button {
+  padding: 10px 18px; background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--muted); cursor: pointer; font-family: inherit; font-size: 13px; transition: .15s;
+}
+nav button:hover { color: var(--text); }
+nav button.act { color: var(--blue); border-bottom-color: var(--blue); }
+
+.tab { display: none; padding: 20px; }
+.tab.act { display: block; }
+
+/* Balance */
+.bal-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.bal-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 16px 20px; min-width: 150px;
+}
+.bal-cur { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.bal-amt { font-size: 22px; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; padding: 8px 12px; color: var(--muted);
+  font-size: 11px; font-weight: normal; border-bottom: 1px solid var(--border);
+}
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+tr:hover td { background: var(--bg2); }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+.stuck-row td { background: rgba(248,81,73,.06); }
+
+/* Latency */
+.lat-grid { display: flex; gap: 16px; margin-bottom: 20px; }
+.lat-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 20px 28px; text-align: center; min-width: 190px;
+}
+.lat-label { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.lat-val { font-size: 38px; }
+.lat-unit { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.lat-val.good { color: var(--green); }
+.lat-val.warn { color: var(--yellow); }
+.lat-val.bad  { color: var(--red); }
+.lat-log-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; }
+.lat-log-title { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.lat-log { font-size: 12px; color: var(--muted); max-height: 220px; overflow-y: auto; }
+.lat-log div { padding: 2px 0; border-bottom: 1px solid var(--bg3); }
+
+.empty { text-align: center; padding: 40px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>◈ TRIARB</h1>
+  <div class="conn"><div class="dot" id="dot"></div><span id="cstat">Connecting...</span></div>
+</header>
+
+<div class="statsbar">
+  <div class="si"><span class="sl">Cycles:</span><span class="sv" id="s-cycles">0</span></div>
+  <div class="si"><span class="sl">Profit:</span><span class="sv g" id="s-profit">$0.0000</span></div>
+  <div class="si"><span class="sl">Stuck:</span><span class="sv" id="s-stuck">0</span></div>
+  <div class="si"><span class="sl">Uptime:</span><span class="sv" id="s-uptime">—</span></div>
+</div>
+
+<nav>
+  <button class="act" onclick="tab('balance',this)">Balance</button>
+  <button onclick="tab('history',this)">History</button>
+  <button onclick="tab('stuck',this)">Stuck&nbsp;<span id="stuck-badge" style="color:var(--red)"></span></button>
+  <button onclick="tab('latency',this)">Latency</button>
+</nav>
+
+<div id="tab-balance" class="tab act">
+  <div class="bal-grid" id="bal-grid"><div class="empty">Waiting for data...</div></div>
+</div>
+
+<div id="tab-history" class="tab">
+  <table>
+    <thead><tr><th>Time</th><th>Triangle</th><th>Amount</th><th>Profit %</th><th>Profit $</th></tr></thead>
+    <tbody id="hist-body"><tr><td colspan="5" class="empty">No trades yet</td></tr></tbody>
+  </table>
+</div>
+
+<div id="tab-stuck" class="tab">
+  <table>
+    <thead><tr><th>Time</th><th>Triangle</th><th>Failed leg</th><th>Currency</th><th>Amount</th><th>Reason</th></tr></thead>
+    <tbody id="stuck-body"><tr><td colspan="6" class="empty">No stuck positions</td></tr></tbody>
+  </table>
+</div>
+
+<div id="tab-latency" class="tab">
+  <div class="lat-grid">
+    <div class="lat-card">
+      <div class="lat-label">WebSocket MEXC → VPS</div>
+      <div class="lat-val" id="ws-val">—</div>
+      <div class="lat-unit">ms (rolling avg)</div>
+    </div>
+    <div class="lat-card">
+      <div class="lat-label">REST order RTT</div>
+      <div class="lat-val" id="rest-val">—</div>
+      <div class="lat-unit">ms</div>
+    </div>
+  </div>
+  <div class="lat-log-box">
+    <div class="lat-log-title">Recent measurements</div>
+    <div class="lat-log" id="lat-log"></div>
+  </div>
+</div>
+
+<script>
+let startTs = null;
+let stuckCount = 0;
+
+function tab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('act'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('act'));
+  document.getElementById('tab-' + name).classList.add('act');
+  btn.classList.add('act');
+}
+
+function ts(unix) {
+  return new Date(unix * 1000).toLocaleTimeString();
+}
+
+function pct(v) {
+  const c = v >= 0 ? 'pos' : 'neg';
+  return `<span class="${c}">${v >= 0 ? '+' : ''}${v.toFixed(4)}%</span>`;
+}
+
+function dollar(v) {
+  const c = v >= 0 ? 'pos' : 'neg';
+  return `<span class="${c}">${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(4)}</span>`;
+}
+
+function latCls(ms) {
+  return ms < 60 ? 'good' : ms < 200 ? 'warn' : 'bad';
+}
+
+function onBalance(d) {
+  const g = document.getElementById('bal-grid');
+  const entries = Object.entries(d).filter(([,v]) => v > 0).sort((a,b) => b[1]-a[1]);
+  if (!entries.length) { g.innerHTML = '<div class="empty">No balances</div>'; return; }
+  g.innerHTML = entries.map(([cur, amt]) =>
+    `<div class="bal-card"><div class="bal-cur">${cur}</div><div class="bal-amt">${amt.toFixed(4)}</div></div>`
+  ).join('');
+}
+
+function onTrade(d) {
+  const tb = document.getElementById('hist-body');
+  const emp = tb.querySelector('.empty');
+  if (emp) emp.parentElement.remove();
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${ts(d.ts)}</td><td>${d.pairs.join(' → ')}</td>` +
+    `<td>${d.start_amount.toFixed(2)} ${d.start_currency}</td>` +
+    `<td>${pct(d.profit_pct)}</td><td>${dollar(d.profit_abs)}</td>`;
+  tb.insertBefore(tr, tb.firstChild);
+  while (tb.rows.length > 100) tb.deleteRow(tb.rows.length - 1);
+}
+
+function onStuck(d) {
+  const tb = document.getElementById('stuck-body');
+  const emp = tb.querySelector('.empty');
+  if (emp) emp.parentElement.remove();
+  stuckCount++;
+  document.getElementById('s-stuck').textContent = stuckCount;
+  document.getElementById('stuck-badge').textContent = `(${stuckCount})`;
+  const tr = document.createElement('tr');
+  tr.className = 'stuck-row';
+  tr.innerHTML = `<td>${ts(d.ts)}</td><td style="font-size:12px">${d.pairs.join(' → ')}</td>` +
+    `<td>#${d.completed_legs + 1}</td>` +
+    `<td><strong style="color:var(--red)">${d.stuck_currency}</strong></td>` +
+    `<td>${d.stuck_amount.toFixed(6)}</td>` +
+    `<td style="font-size:11px;color:var(--muted)">${d.reason}</td>`;
+  tb.insertBefore(tr, tb.firstChild);
+}
+
+function onLatency(d) {
+  if (d.ws_ms != null) {
+    const el = document.getElementById('ws-val');
+    el.textContent = d.ws_ms.toFixed(1);
+    el.className = 'lat-val ' + latCls(d.ws_ms);
+  }
+  if (d.rest_ms != null) {
+    const el = document.getElementById('rest-val');
+    el.textContent = d.rest_ms.toFixed(1);
+    el.className = 'lat-val ' + latCls(d.rest_ms);
+  }
+  const log = document.getElementById('lat-log');
+  const parts = [];
+  if (d.ws_ms != null) parts.push(`WS: ${d.ws_ms.toFixed(1)}ms`);
+  if (d.rest_ms != null) parts.push(`REST: ${d.rest_ms.toFixed(1)}ms`);
+  const line = document.createElement('div');
+  line.textContent = `${ts(d.ts)}  ${parts.join('   ')}`;
+  log.insertBefore(line, log.firstChild);
+  while (log.children.length > 60) log.removeChild(log.lastChild);
+}
+
+function onStats(d) {
+  document.getElementById('s-cycles').textContent = d.cycles;
+  const p = d.total_profit;
+  const el = document.getElementById('s-profit');
+  el.textContent = `${p >= 0 ? '+' : ''}$${p.toFixed(4)}`;
+  el.className = 'sv ' + (p >= 0 ? 'g' : 'r');
+  if (startTs === null) startTs = d.start_ts;
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('dot').className = 'dot on';
+    document.getElementById('cstat').textContent = 'Connected';
+  };
+  ws.onclose = () => {
+    document.getElementById('dot').className = 'dot';
+    document.getElementById('cstat').textContent = 'Reconnecting...';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'balance') onBalance(m.data);
+    else if (m.type === 'trade') onTrade(m.data);
+    else if (m.type === 'stuck') onStuck(m.data);
+    else if (m.type === 'latency') onLatency(m.data);
+    else if (m.type === 'stats') onStats(m.data);
+  };
+}
+
+setInterval(() => {
+  if (!startTs) return;
+  const s = Math.floor(Date.now()/1000 - startTs);
+  const h = String(Math.floor(s/3600)).padStart(2,'0');
+  const m = String(Math.floor(s%3600/60)).padStart(2,'0');
+  const sc = String(s%60).padStart(2,'0');
+  document.getElementById('s-uptime').textContent = `${h}:${m}:${sc}`;
+}, 1000);
+
+connect();
+</script>
+</body>
+</html>

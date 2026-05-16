@@ -82,6 +82,13 @@ class MexcRestClient:
         logger.debug(f"BUY {symbol} quoteQty={quote_qty:.4f} → executedQty={data.get('executedQty')}")
         return data
 
+    async def ping_ms(self) -> float:
+        """Measure REST round-trip to MEXC."""
+        t0 = time.time()
+        async with self._session.get(f"{BASE_URL}/api/v3/ping") as r:
+            await r.read()
+        return (time.time() - t0) * 1000
+
     async def market_sell(self, symbol: str, base_qty: float) -> dict:
         """SELL: sell base_qty of base currency, receive quote.
         Returns order dict with cummulativeQuoteQty (quote received)."""

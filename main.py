@@ -13,6 +13,7 @@ from src.arbitrage.engine import ArbitrageEngine, build_triangles
 from src.arbitrage.executor import ExecutionEngine
 from src.exchange.mexc.rest_client import MexcRestClient
 from src.exchange.mexc.ws_client import MEXCWebSocket
+from src.ui.ws_server import UIServer
 
 load_dotenv()
 
@@ -21,7 +22,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
-# Все пары с 0% комиссией (мейкер и тейкер) на MEXC спот
 ZERO_FEE_SYMBOLS = [
     "0GUSDC", "1INCHUSDC", "AAVEUSDC", "ACHUSDC", "ACTUSDC", "ADAEUR", "ADAUSDC",
     "AEVOUSDC", "AIXBTUSDC", "ALGOUSDC", "ALLOUSDC", "ANIMEUSDC", "APEUSDC", "API3USDC",
@@ -75,45 +75,84 @@ ZERO_FEE_SYMBOLS = [
 ]
 
 
+async def latency_loop(ws: MEXCWebSocket, client: MexcRestClient | None, ui: UIServer) -> None:
+    while True:
+        await asyncio.sleep(10)
+        data: dict = {"ts": int(__import__("time").time()), "ws_ms": ws.avg_latency_ms}
+        if client:
+            try:
+                data["rest_ms"] = await client.ping_ms()
+            except Exception:
+                pass
+        await ui.broadcast({"type": "latency", "data": data})
+
+
+async def balance_loop(client: MexcRestClient, ui: UIServer) -> None:
+    while True:
+        try:
+            balances = await client.get_balances()
+            await ui.broadcast({"type": "balance", "data": balances})
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Balance poll: {e}")
+        await asyncio.sleep(30)
+
+
 async def main() -> None:
     log = logging.getLogger(__name__)
 
-    api_key = os.environ.get("MEXC_API_KEY", "")
+    api_key    = os.environ.get("MEXC_API_KEY", "")
     api_secret = os.environ.get("MEXC_API_SECRET", "")
-    trade_amount = float(os.environ.get("TRADE_AMOUNT", "50"))
+    trade_amount   = float(os.environ.get("TRADE_AMOUNT", "50"))
     min_profit_pct = float(os.environ.get("MIN_PROFIT_PCT", "0.03"))
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    ui_port = int(os.environ.get("UI_PORT", "8765"))
 
     triangles = build_triangles(set(ZERO_FEE_SYMBOLS))
     used = sorted({p for t in triangles for p in t.pairs})
-    log.info(f"Triangles: {len(triangles)}, subscribing to {len(used)} pairs")
-    log.info(f"Trade amount: ${trade_amount}  Min profit: {min_profit_pct}%  Dry run: {dry_run}")
+    log.info(f"Triangles: {len(triangles)}, pairs: {len(used)}")
+    log.info(f"Trade: ${trade_amount}  MinProfit: {min_profit_pct}%  DryRun: {dry_run}")
 
-    if dry_run or not api_key:
+    ui = UIServer(port=ui_port)
+    await ui.start()
+
+    client: MexcRestClient | None = None
+    executor: ExecutionEngine | None = None
+
+    if api_key and not dry_run:
+        client = MexcRestClient(api_key, api_secret)
+        await client.start()
+        await client.load_lot_sizes(used)
+        executor = ExecutionEngine(
+            client=client,
+            trade_amount=trade_amount,
+            min_profit_pct=min_profit_pct,
+            broadcast=ui.broadcast,
+        )
+        on_opportunity = executor.on_opportunity
+        log.info("Trading mode: LIVE")
+    else:
         if not api_key:
-            log.warning("No API keys — running in monitor-only mode")
+            log.warning("No API keys — monitor only")
+        else:
+            log.info("DRY_RUN=true — monitor only")
 
         async def on_opportunity(opp):
             pairs = " → ".join(opp.triangle.pairs)
             log.info(f"[SIGNAL] {pairs}  profit={opp.profit_pct:+.4f}%")
 
-    else:
-        client = MexcRestClient(api_key, api_secret)
-        await client.start()
-        await client.load_lot_sizes(used)
+    ws_client = MEXCWebSocket(on_book_update=ArbitrageEngine(
+        triangles, on_opportunity=on_opportunity
+    ).on_book_update)
+    ws_client.set_symbols(used)
 
-        executor = ExecutionEngine(
-            client=client,
-            trade_amount=trade_amount,
-            min_profit_pct=min_profit_pct,
-        )
-        on_opportunity = executor.on_opportunity
+    tasks = [
+        asyncio.create_task(ws_client.start()),
+        asyncio.create_task(latency_loop(ws_client, client, ui)),
+    ]
+    if client:
+        tasks.append(asyncio.create_task(balance_loop(client, ui)))
 
-    engine = ArbitrageEngine(triangles, on_opportunity=on_opportunity)
-    ws = MEXCWebSocket(on_book_update=engine.on_book_update)
-    ws.set_symbols(used)
-
-    await ws.start()
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
