@@ -18,7 +18,7 @@ _WS_HEADERS = {
     ),
 }
 
-MAX_SUBS_PER_CONN = 30  # лимит MEXC на одно WS соединение
+MAX_SUBS_PER_CONN = 30
 
 
 @dataclass
@@ -28,12 +28,8 @@ class OrderBook:
     ask: float
     bid_qty: float
     ask_qty: float
-    exchange_ts: float  # Unix seconds from exchange
-    receive_ts: float   # Unix seconds when received locally
-
-    @property
-    def latency_ms(self) -> float:
-        return (self.receive_ts - self.exchange_ts) * 1000
+    exchange_ts: float
+    receive_ts: float
 
 
 class MEXCWebSocket:
@@ -45,7 +41,8 @@ class MEXCWebSocket:
     def __init__(self, on_book_update):
         self._on_book_update = on_book_update
         self._topics: list[str] = []
-        self._lat_samples: list[float] = []  # rolling last-100 WS latencies
+        self._lat_samples: list[float] = []  # PING/PONG round-trip samples
+        self._ping_sent_at: float | None = None
 
     @property
     def avg_latency_ms(self) -> float:
@@ -55,9 +52,8 @@ class MEXCWebSocket:
         self._topics = [f"spot@public.aggre.bookTicker.v3.api.pb@10ms@{s}" for s in symbols]
 
     async def start(self) -> None:
-        # Разбиваем топики на группы по MAX_SUBS_PER_CONN и запускаем параллельно
         chunks = [
-            self._topics[i : i + MAX_SUBS_PER_CONN]
+            self._topics[i: i + MAX_SUBS_PER_CONN]
             for i in range(0, len(self._topics), MAX_SUBS_PER_CONN)
         ]
         logger.info(f"Starting {len(chunks)} WS connection(s) for {len(self._topics)} topics")
@@ -76,17 +72,20 @@ class MEXCWebSocket:
             async with session.ws_connect(self.WS_URL, heartbeat=None) as ws:
                 logger.info(f"WS[{idx}] connected ({len(topics)} topics)")
                 await self._subscribe_all(ws, idx, topics)
-                ping_task = asyncio.create_task(self._ping_loop(ws, idx))
+                # Only WS[0] measures ping latency
+                ping_task = asyncio.create_task(self._ping_loop(ws, idx, measure=(idx == 0)))
                 try:
                     await self._listen(ws)
                 finally:
                     ping_task.cancel()
         logger.warning(f"WS[{idx}] connection closed")
 
-    async def _ping_loop(self, ws, idx: int) -> None:
+    async def _ping_loop(self, ws, idx: int, measure: bool = False) -> None:
         while True:
             await asyncio.sleep(self.PING_INTERVAL)
             try:
+                if measure:
+                    self._ping_sent_at = time.time()
                 await ws.send_str('{"method":"PING"}')
                 logger.debug(f"WS[{idx}] PING sent")
             except Exception:
@@ -94,7 +93,7 @@ class MEXCWebSocket:
 
     async def _subscribe_all(self, ws, idx: int, topics: list[str]) -> None:
         for i in range(0, len(topics), self.BATCH_SIZE):
-            batch = topics[i : i + self.BATCH_SIZE]
+            batch = topics[i: i + self.BATCH_SIZE]
             await ws.send_str(json.dumps({"method": "SUBSCRIPTION", "params": batch}))
             symbols = [t.rsplit("@", 1)[-1] for t in batch]
             logger.info(f"WS[{idx}] batch {i // self.BATCH_SIZE + 1}: {symbols}")
@@ -105,9 +104,21 @@ class MEXCWebSocket:
             if msg.type == aiohttp.WSMsgType.BINARY:
                 await self._handle_binary(msg.data)
             elif msg.type == aiohttp.WSMsgType.TEXT:
-                logger.debug(f"TEXT: {msg.data[:200]}")
+                self._handle_text(msg.data)
             elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                 break
+
+    def _handle_text(self, data: str) -> None:
+        # Measure PONG round-trip
+        if self._ping_sent_at and "PONG" in data:
+            lat = (time.time() - self._ping_sent_at) * 1000
+            self._ping_sent_at = None
+            self._lat_samples.append(lat)
+            if len(self._lat_samples) > 20:
+                self._lat_samples.pop(0)
+            logger.debug(f"WS PONG latency: {lat:.1f}ms")
+        else:
+            logger.debug(f"TEXT: {data[:200]}")
 
     async def _handle_binary(self, raw: bytes) -> None:
         receive_ts = time.time()
@@ -134,10 +145,5 @@ class MEXCWebSocket:
         except (ValueError, AttributeError) as e:
             logger.warning(f"Field error: {e}")
             return
-
-        lat = book.latency_ms
-        self._lat_samples.append(lat)
-        if len(self._lat_samples) > 100:
-            self._lat_samples.pop(0)
 
         await self._on_book_update(book)
