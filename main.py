@@ -5,10 +5,16 @@ sys.path.insert(0, str(Path(__file__).parent / "src" / "proto"))
 
 import asyncio
 import logging
+import os
+
+from dotenv import load_dotenv
 
 from src.arbitrage.engine import ArbitrageEngine, build_triangles
-from src.arbitrage.models import Opportunity
+from src.arbitrage.executor import ExecutionEngine
+from src.exchange.mexc.rest_client import MexcRestClient
 from src.exchange.mexc.ws_client import MEXCWebSocket
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,7 +22,6 @@ logging.basicConfig(
 )
 
 # Все пары с 0% комиссией (мейкер и тейкер) на MEXC спот
-# Источник: https://www.mexc.com/ru-RU/fee — вкладка "0 комиссий"
 ZERO_FEE_SYMBOLS = [
     "0GUSDC", "1INCHUSDC", "AAVEUSDC", "ACHUSDC", "ACTUSDC", "ADAEUR", "ADAUSDC",
     "AEVOUSDC", "AIXBTUSDC", "ALGOUSDC", "ALLOUSDC", "ANIMEUSDC", "APEUSDC", "API3USDC",
@@ -70,18 +75,39 @@ ZERO_FEE_SYMBOLS = [
 ]
 
 
-async def on_opportunity(opp: Opportunity) -> None:
-    pairs = " → ".join(opp.triangle.pairs)
-    print(f"[ARB] {pairs}  profit={opp.profit_pct:+.4f}%")
-
-
 async def main() -> None:
-    triangles = build_triangles(set(ZERO_FEE_SYMBOLS))
+    log = logging.getLogger(__name__)
 
-    # Подписываемся только на пары, задействованные в треугольниках
+    api_key = os.environ.get("MEXC_API_KEY", "")
+    api_secret = os.environ.get("MEXC_API_SECRET", "")
+    trade_amount = float(os.environ.get("TRADE_AMOUNT", "50"))
+    min_profit_pct = float(os.environ.get("MIN_PROFIT_PCT", "0.03"))
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+
+    triangles = build_triangles(set(ZERO_FEE_SYMBOLS))
     used = sorted({p for t in triangles for p in t.pairs})
-    logger = logging.getLogger(__name__)
-    logger.info(f"Triangles: {len(triangles)}, subscribing to {len(used)} pairs")
+    log.info(f"Triangles: {len(triangles)}, subscribing to {len(used)} pairs")
+    log.info(f"Trade amount: ${trade_amount}  Min profit: {min_profit_pct}%  Dry run: {dry_run}")
+
+    if dry_run or not api_key:
+        if not api_key:
+            log.warning("No API keys — running in monitor-only mode")
+
+        async def on_opportunity(opp):
+            pairs = " → ".join(opp.triangle.pairs)
+            log.info(f"[SIGNAL] {pairs}  profit={opp.profit_pct:+.4f}%")
+
+    else:
+        client = MexcRestClient(api_key, api_secret)
+        await client.start()
+        await client.load_lot_sizes(used)
+
+        executor = ExecutionEngine(
+            client=client,
+            trade_amount=trade_amount,
+            min_profit_pct=min_profit_pct,
+        )
+        on_opportunity = executor.on_opportunity
 
     engine = ArbitrageEngine(triangles, on_opportunity=on_opportunity)
     ws = MEXCWebSocket(on_book_update=engine.on_book_update)
