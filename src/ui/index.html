@@ -128,9 +128,9 @@ tr:hover td { background: var(--bg2); }
 <div id="tab-latency" class="tab">
   <div class="lat-grid">
     <div class="lat-card">
-      <div class="lat-label">WebSocket MEXC → VPS</div>
+      <div class="lat-label">MEXC API ping RTT</div>
       <div class="lat-val" id="ws-val">—</div>
-      <div class="lat-unit">ms (rolling avg)</div>
+      <div class="lat-unit">ms</div>
     </div>
     <div class="lat-card">
       <div class="lat-label">REST order RTT</div>
@@ -212,20 +212,14 @@ function onStuck(d) {
 }
 
 function onLatency(d) {
-  if (d.ws_ms != null) {
-    const el = document.getElementById('ws-val');
-    el.textContent = d.ws_ms.toFixed(1);
-    el.className = 'lat-val ' + latCls(d.ws_ms);
-  }
   if (d.rest_ms != null) {
-    const el = document.getElementById('rest-val');
+    const el = document.getElementById('ws-val');
     el.textContent = d.rest_ms.toFixed(1);
     el.className = 'lat-val ' + latCls(d.rest_ms);
   }
   const log = document.getElementById('lat-log');
   const parts = [];
-  if (d.ws_ms != null) parts.push(`WS: ${d.ws_ms.toFixed(1)}ms`);
-  if (d.rest_ms != null) parts.push(`REST: ${d.rest_ms.toFixed(1)}ms`);
+  if (d.rest_ms != null) parts.push(`ping: ${d.rest_ms.toFixed(1)}ms`);
   const line = document.createElement('div');
   line.textContent = `${ts(d.ts)}  ${parts.join('   ')}`;
   log.insertBefore(line, log.firstChild);
