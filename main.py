@@ -76,30 +76,22 @@ ZERO_FEE_SYMBOLS = [
 
 
 async def latency_loop(ui: UIServer) -> None:
-    import re
-    import sys
     import time as _time
+    import urllib.request as _urllib
 
-    host = "wbs-api.mexc.com"
-    cmd = ["ping", "-n", "1", "-w", "2000", host] if sys.platform == "win32" \
-        else ["ping", "-c", "1", "-W", "2", host]
+    def _ping() -> float:
+        start = _time.monotonic()
+        _urllib.urlopen("https://api.mexc.com/api/v3/ping", timeout=5)
+        return round((_time.monotonic() - start) * 1000, 2)
 
+    loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(10)
         lat = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-            m = re.search(r"time[=<](\d+\.?\d*)\s*ms", stdout.decode())
-            if m:
-                lat = float(m.group(1))
+            lat = await loop.run_in_executor(None, _ping)
         except Exception:
             pass
-
         if lat is not None:
             await ui.broadcast({
                 "type": "latency",
