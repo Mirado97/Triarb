@@ -76,30 +76,35 @@ ZERO_FEE_SYMBOLS = [
 
 
 async def latency_loop(ui: UIServer) -> None:
-    import socket as _socket
+    import re
+    import sys
     import time as _time
-    # Resolve once at startup
+
     host = "wbs-api.mexc.com"
-    try:
-        ip = _socket.gethostbyname(host)
-        logging.getLogger(__name__).info(f"Latency target: {host} → {ip}")
-    except Exception:
-        ip = host
+    cmd = ["ping", "-n", "1", "-w", "2000", host] if sys.platform == "win32" \
+        else ["ping", "-c", "1", "-W", "2", host]
 
     while True:
         await asyncio.sleep(10)
-        t0 = _time.time()
+        lat = None
         try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, 443), timeout=5.0
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            lat = (_time.time() - t0) * 1000
-            writer.close()
-            await writer.wait_closed()
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            m = re.search(r"time[=<](\d+\.?\d*)\s*ms", stdout.decode())
+            if m:
+                lat = float(m.group(1))
         except Exception:
-            lat = None
+            pass
+
         if lat is not None:
-            await ui.broadcast({"type": "latency", "data": {"ts": int(_time.time()), "rest_ms": lat}})
+            await ui.broadcast({
+                "type": "latency",
+                "data": {"ts": int(_time.time()), "rest_ms": lat},
+            })
 
 
 async def balance_loop(client: MexcRestClient, ui: UIServer) -> None:
