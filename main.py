@@ -76,22 +76,30 @@ ZERO_FEE_SYMBOLS = [
 
 
 async def latency_loop(ui: UIServer) -> None:
-    import aiohttp as _aiohttp
+    import socket as _socket
     import time as _time
-    async with _aiohttp.ClientSession() as session:
-        while True:
-            await asyncio.sleep(10)
-            t0 = _time.time()
-            try:
-                async with session.get("https://api.mexc.com/api/v3/ping") as r:
-                    await r.read()
-                rest_ms = (_time.time() - t0) * 1000
-            except Exception:
-                rest_ms = None
-            data: dict = {"ts": int(_time.time())}
-            if rest_ms is not None:
-                data["rest_ms"] = rest_ms
-            await ui.broadcast({"type": "latency", "data": data})
+    # Resolve once at startup
+    host = "wbs-api.mexc.com"
+    try:
+        ip = _socket.gethostbyname(host)
+        logging.getLogger(__name__).info(f"Latency target: {host} → {ip}")
+    except Exception:
+        ip = host
+
+    while True:
+        await asyncio.sleep(10)
+        t0 = _time.time()
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, 443), timeout=5.0
+            )
+            lat = (_time.time() - t0) * 1000
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            lat = None
+        if lat is not None:
+            await ui.broadcast({"type": "latency", "data": {"ts": int(_time.time()), "rest_ms": lat}})
 
 
 async def balance_loop(client: MexcRestClient, ui: UIServer) -> None:
